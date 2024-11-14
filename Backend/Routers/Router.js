@@ -69,18 +69,17 @@ async function authMiddleware(req, res, next) {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     req.body.privateKey = user.privateKey;
-    req.body.publicKey = user.publicKey;
     next();
   } catch (err) {
     res.status(400).json({ message: "Invalid or expired token", error: err.message });
   }
 }
 
-// walletRouter.use(authMiddleware);
+walletRouter.use(authMiddleware);
 
 walletRouter.post("/txn/sign", async (req, res) => {
   try {
-    const decodedPrivateKey = bs58.decode("3rT7gJG1Nf1rTMiRk5f7CiBxZdGUpF2fC6dfnkittH7HyE2T1mjjkFWKVuME81F7oHC9eSfC3YfF9oxz1pxceyT");
+    const decodedPrivateKey = bs58.decode(req.body.privateKey);
     const keypair = Keypair.fromSecretKey(decodedPrivateKey);
 
     const serializedTransaction = req.body.message;
