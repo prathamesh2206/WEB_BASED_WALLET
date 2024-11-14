@@ -1,85 +1,114 @@
 const { Router } = require("express");
 const walletRouter = Router();
-const { Keypair } = require("@solana/web3.js");
+const { Keypair, Transaction, Connection } = require("@solana/web3.js");
 const jwt = require("jsonwebtoken");
 const { userModel } = require("../DB");
-const JWT_SECRET = process.env.JWT_SECRET;
 const bcrypt = require("bcrypt");
-const salt_rounds = parseInt(process.env.SALT_ROUNDS); // Ensure it's an integer
+const bs58 = require("bs58").default || require("bs58");
+require("dotenv").config();
+
+const JWT_SECRET = process.env.JWT_SECRET;
+const salt_rounds = parseInt(process.env.SALT_ROUNDS);
+const connection = new Connection(
+  "https://solana-mainnet.g.alchemy.com/v2/mBwItzqA8580MsMyfZnWvSGK6ja5BrXP"
+);
 
 walletRouter.post("/signup", async (req, res) => {
-    const { username, password } = req.body;
+  const { username, password } = req.body;
 
-    try {
-        // Check if user already exists
-        const userExists = await userModel.findOne({ username: username });
-        if (userExists) {
-            return res.status(409).json({ message: "User already exists" });
-        }
+  try {
+    const userExists = await userModel.findOne({ username });
+    if (userExists) return res.status(409).json({ message: "User already exists" });
+    const keypair = Keypair.generate();
+    const pubKey = bs58.encode(Buffer.from(keypair.publicKey.toBytes())); 
+    const privateKey = bs58.encode(Buffer.from(keypair.secretKey));
+    const hashedPassword = await bcrypt.hash(password, salt_rounds);
 
-        // Generate Solana keypair
-        const keypair = Keypair.generate();
-        const pubKey = keypair.publicKey.toString();
-        const privateKey = keypair.secretKey.toString();
+    const newUser = await userModel.create({
+      username,
+      password: hashedPassword,
+      publicKey: pubKey,
+      privateKey,
+    });
 
-        // Hash password
-        const hashedPassword = await bcrypt.hash(password, salt_rounds);
-
-        // Create a new user
-        const newUser = await userModel.create({
-            username:username,
-            password: hashedPassword,
-            publicKey:pubKey,
-            privateKey:privateKey
-        });
-
-        if (newUser) {
-            return res.status(201).json({
-                message: "Signed up successfully",
-                publicKey: pubKey,
-            });
-        }
-    } catch (error) {
-        console.error("Error during signup:", error);
-        return res.status(500).json({ message: "Error while signing up" });
-    }
+    return res.status(201).json({
+      message: "Signed up successfully",
+      publicKey: pubKey,
+    });
+  } catch (error) {
+    console.error("Error during signup:", error);
+    return res.status(500).json({ message: "Error while signing up" });
+  }
 });
 
 walletRouter.post("/signin", async (req, res) => {
-    const { username, password } = req.body;
+  const { username, password } = req.body;
 
-    try {
-        // Find user by username
-        const user = await userModel.findOne({ username: username });
-        if (!user) {
-            return res.status(404).json({ message: "User not found" });
-        }
+  try {
+    const user = await userModel.findOne({ username });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
-        // Verify password
-        const passwordMatch = await bcrypt.compare(password, user.password);
-        if (!passwordMatch) {
-            return res.status(401).json({ message: "Incorrect password" });
-        }
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch) return res.status(401).json({ message: "Incorrect password" });
 
-        // Create and send JWT token
-        const token = jwt.sign({ userId: user._id }, JWT_SECRET);
-        return res.status(200).json({ token: token });
-    } catch (error) {
-        console.error("Error during signin:", error);
-        return res.status(500).json({ message: "Error while signing in" });
-    }
+    const token = jwt.sign({ userId: user._id }, JWT_SECRET);
+    return res.status(200).json({ token });
+  } catch (error) {
+    console.error("Error during signin:", error);
+    return res.status(500).json({ message: "Error while signing in" });
+  }
 });
 
+async function authMiddleware(req, res, next) {
+  const token = req.headers.authorization;
+  if (!token) return res.status(400).json({ message: "Token is required" });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await userModel.findById(decoded.userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    req.body.privateKey = user.privateKey;
+    req.body.publicKey = user.publicKey;
+    next();
+  } catch (err) {
+    res.status(400).json({ message: "Invalid or expired token", error: err.message });
+  }
+}
+
+// walletRouter.use(authMiddleware);
+
+walletRouter.post("/txn/sign", async (req, res) => {
+  try {
+    const decodedPrivateKey = bs58.decode("3rT7gJG1Nf1rTMiRk5f7CiBxZdGUpF2fC6dfnkittH7HyE2T1mjjkFWKVuME81F7oHC9eSfC3YfF9oxz1pxceyT");
+    const keypair = Keypair.fromSecretKey(decodedPrivateKey);
+
+    const serializedTransaction = req.body.message;
+    console.log("before signing", serializedTransaction);
+
+    const transaction = Transaction.from(Buffer.from(serializedTransaction));
+    console.log("after deserialization", transaction);
+
+    const { blockhash } = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = keypair.publicKey;
+
+    transaction.sign(keypair);
+    console.log("Transaction before sending:", transaction);
+
+    const signature = await connection.sendTransaction(transaction, [keypair], {
+      skipPreflight: false,
+      preflightCommitment: 'processed'
+    });
+
+    res.status(200).json({ message: "Transaction signed and sent", signature });
+  } catch (error) {
+    console.error("Error during transaction:", error);
+    res.status(500).json({ message: "Error signing and sending transaction", error: error.message });
+  }
+});
+
+
+
+
 module.exports = walletRouter;
-
-walletRouter.post("/txn", async (req,res) => {
-    
-})
-walletRouter.get("/txn",async () => {
-    
-})
-
-
-module.exports =({
-    walletRouter
-})
