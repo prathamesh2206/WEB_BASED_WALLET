@@ -56,7 +56,7 @@ const Wallet = () => {
             Transactions
           </button>
         </div>
-        <div className=" md:block">
+        <div className="  mt-2 md:block">
           {(activeSection === "overview" || activeSection === "tokens") && (
             <TokenList />
           )}
